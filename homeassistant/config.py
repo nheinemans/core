@@ -484,13 +484,30 @@ def process_ha_config_upgrade(hass: HomeAssistant) -> None:
 
 
 @callback
+def async_raise_exception(
+    ex: Exception,
+    domain: str,
+    config: dict,
+    hass: HomeAssistant,
+    link: str | None = None,
+) -> None:
+    """Raise an error for configuration validation.
+
+    This method must be run in the event loop.
+    """
+    if hass is not None:
+        async_notify_setup_error(hass, domain, link)
+    message, _ = _format_config_error(ex, domain, config, link)
+    raise HomeAssistantError(message) from ex
+
+
+@callback
 def async_log_exception(
     ex: Exception,
     domain: str,
     config: dict,
     hass: HomeAssistant,
     link: str | None = None,
-    raise_exception: bool = False,
 ) -> None:
     """Log an error for configuration validation.
 
@@ -499,12 +516,7 @@ def async_log_exception(
     if hass is not None:
         async_notify_setup_error(hass, domain, link)
     message, is_friendly = _format_config_error(ex, domain, config, link)
-    if raise_exception:
-        raise HomeAssistantError(message) from ex
-    if not is_friendly and ex:
-        _LOGGER.exception(message)
-        return
-    _LOGGER.error(message)
+    _LOGGER.error(message, exc_info=not is_friendly and ex)
 
 
 @callback
@@ -833,6 +845,7 @@ async def async_process_component_config(  # noqa: C901
     hass: HomeAssistant,
     config: ConfigType,
     integration: Integration,
+    *,
     raise_on_failure: bool = False,
 ) -> ConfigType | None:
     """Check component configuration and return processed configuration.
@@ -844,9 +857,21 @@ async def async_process_component_config(  # noqa: C901
     This method must be run in the event loop.
     """
     domain = integration.domain
+
+    def _raise_on_config_fail(ex: Exception, domain: str, config: ConfigType) -> None:
+        """Raise an exception if the config fails instead of logging."""
+        if raise_on_failure:
+            async_raise_exception(ex, domain, config, hass, integration.documentation)
+
+    def _raise_on_fail(ex: Exception, message: str) -> None:
+        """Raise an exception instead of logging."""
+        if raise_on_failure:
+            raise HomeAssistantError(message) from ex
+
     try:
         component = integration.get_component()
     except LOAD_EXCEPTIONS as ex:
+        _raise_on_fail(ex, f"Unable to import {domain}: {ex}")
         _LOGGER.error("Unable to import %s: %s", domain, ex)
         return None
 
@@ -859,6 +884,7 @@ async def async_process_component_config(  # noqa: C901
         # If the config platform contains bad imports, make sure
         # that still fails.
         if err.name != f"{integration.pkg_path}.config":
+            _raise_on_fail(err, f"Error importing config platform{domain}: {err}")
             _LOGGER.error("Error importing config platform %s: %s", domain, err)
             return None
 
@@ -870,11 +896,11 @@ async def async_process_component_config(  # noqa: C901
                 await config_validator.async_validate_config(hass, config)
             )
         except (vol.Invalid, HomeAssistantError) as ex:
-            async_log_exception(
-                ex, domain, config, hass, integration.documentation, raise_on_failure
-            )
+            _raise_on_config_fail(ex, domain, config)
+            async_log_exception(ex, domain, config, hass, integration.documentation)
             return None
-        except Exception:  # pylint: disable=broad-except
+        except Exception as ex:  # pylint: disable=broad-except
+            _raise_on_fail(ex, f"Unknown error calling {domain} config validator")
             _LOGGER.exception("Unknown error calling %s config validator", domain)
             return None
 
@@ -883,11 +909,11 @@ async def async_process_component_config(  # noqa: C901
         try:
             return component.CONFIG_SCHEMA(config)  # type: ignore[no-any-return]
         except vol.Invalid as ex:
-            async_log_exception(
-                ex, domain, config, hass, integration.documentation, raise_on_failure
-            )
+            _raise_on_config_fail(ex, domain, config)
+            async_log_exception(ex, domain, config, hass, integration.documentation)
             return None
-        except Exception:  # pylint: disable=broad-except
+        except Exception as ex:  # pylint: disable=broad-except
+            _raise_on_fail(ex, f"Unknown error calling {domain} CONFIG_SCHEMA")
             _LOGGER.exception("Unknown error calling %s CONFIG_SCHEMA", domain)
             return None
 
@@ -904,11 +930,17 @@ async def async_process_component_config(  # noqa: C901
         try:
             p_validated = component_platform_schema(p_config)
         except vol.Invalid as ex:
-            async_log_exception(
-                ex, domain, p_config, hass, integration.documentation, raise_on_failure
-            )
+            _raise_on_config_fail(ex, domain, p_config)
+            async_log_exception(ex, domain, p_config, hass, integration.documentation)
             continue
-        except Exception:  # pylint: disable=broad-except
+        except Exception as ex:  # pylint: disable=broad-except
+            _raise_on_fail(
+                ex,
+                (
+                    f"Unknown error validating {p_name} platform config with {domain} component"
+                    " platform schema"
+                ),
+            )
             _LOGGER.exception(
                 (
                     "Unknown error validating %s platform config with %s component"
@@ -929,12 +961,14 @@ async def async_process_component_config(  # noqa: C901
         try:
             p_integration = await async_get_integration_with_requirements(hass, p_name)
         except (RequirementsNotFound, IntegrationNotFound) as ex:
+            _raise_on_fail(ex, f"Platform error: {domain} - {ex}")
             _LOGGER.error("Platform error: %s - %s", domain, ex)
             continue
 
         try:
             platform = p_integration.get_platform(domain)
-        except LOAD_EXCEPTIONS:
+        except LOAD_EXCEPTIONS as ex:
+            _raise_on_fail(ex, f"Platform error: {domain}")
             _LOGGER.exception("Platform error: %s", domain)
             continue
 
@@ -943,13 +977,14 @@ async def async_process_component_config(  # noqa: C901
             try:
                 p_validated = platform.PLATFORM_SCHEMA(p_config)
             except vol.Invalid as ex:
+                platform_name = f"{domain}.{p_name}"
+                _raise_on_config_fail(ex, platform_name, p_config)
                 async_log_exception(
                     ex,
-                    f"{domain}.{p_name}",
+                    platform_name,
                     p_config,
                     hass,
                     p_integration.documentation,
-                    raise_on_failure,
                 )
                 continue
             except Exception:  # pylint: disable=broad-except
