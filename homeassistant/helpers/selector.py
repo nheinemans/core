@@ -993,6 +993,7 @@ class SelectSelectorConfig(TypedDict, total=False):
     mode: SelectSelectorMode
     translation_key: str
     sort: bool
+    allow_none: bool
 
 
 @SELECTORS.register("select")
@@ -1011,6 +1012,7 @@ class SelectSelector(Selector[SelectSelectorConfig]):
             ),
             vol.Optional("translation_key"): cv.string,
             vol.Optional("sort", default=False): cv.boolean,
+            vol.Optional("allow_none", default=False): cv.boolean,
         }
     )
 
@@ -1020,7 +1022,7 @@ class SelectSelector(Selector[SelectSelectorConfig]):
 
     def __call__(self, data: Any) -> Any:
         """Validate the passed selection."""
-        options: Sequence[str] = []
+        options: Sequence[str | None] = []
         if config_options := self.config["options"]:
             if isinstance(config_options[0], str):
                 options = cast(Sequence[str], config_options)
@@ -1030,15 +1032,21 @@ class SelectSelector(Selector[SelectSelectorConfig]):
                     for option in cast(Sequence[SelectOptionDict], config_options)
                 ]
 
-        parent_schema = vol.In(options)
+        if self.config["allow_none"]:
+            item_schema = vol.Schema(vol.Any(str, None))
+            options_schema = vol.Any(vol.In(options), None)
+        else:
+            item_schema = vol.Schema(str)
+            options_schema = vol.In(options)
+
         if self.config["custom_value"]:
-            parent_schema = vol.Any(parent_schema, str)
+            options_schema = vol.Any(options_schema, str)
 
         if not self.config["multiple"]:
-            return parent_schema(vol.Schema(str)(data))
+            return options_schema(item_schema(data))
         if not isinstance(data, list):
             raise vol.Invalid("Value should be a list")
-        return [parent_schema(vol.Schema(str)(val)) for val in data]
+        return [options_schema(item_schema(val)) for val in data]
 
 
 class TargetSelectorConfig(TypedDict, total=False):
