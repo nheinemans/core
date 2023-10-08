@@ -148,6 +148,12 @@ jobs:
             sed -i "s|# decora-wifi|decora-wifi|g" ${requirement_file}
             sed -i "s|# python-gammu|python-gammu|g" ${requirement_file}
 
+            if [ "${{ matrix.abi }}" == "cp312" ]; then
+              # pydrawise depends on apischema
+              # which links an incompatible version of cython
+              sed -i "s|pydrawise|# pydrawise|g" ${requirement_file}
+            fi
+
             # Some packages are not buildable on armhf anymore
             if [ "${{ matrix.arch }}" = "armhf" ]; then
 
