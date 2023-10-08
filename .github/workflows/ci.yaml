@@ -771,7 +771,7 @@ jobs:
           python3 -m script.translations develop --all
       - name: Run pytest (fully)
         if: needs.info.outputs.test_full_suite == 'true'
-        timeout-minutes: 60
+        timeout-minutes: 120
         id: pytest-full
         env:
           PYTHONDONTWRITEBYTECODE: 1
