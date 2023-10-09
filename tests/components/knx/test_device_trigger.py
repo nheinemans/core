@@ -202,6 +202,7 @@ async def test_get_trigger_capabilities_node_status(
                     "multiple": True,
                     "options": [],
                     "sort": False,
+                    "allow_none": False,
                 },
             },
         }
