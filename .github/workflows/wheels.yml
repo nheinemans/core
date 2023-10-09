@@ -196,6 +196,55 @@ jobs:
           # Do not pin numpy in wheels building
           sed -i "/numpy/d" homeassistant/package_constraints.txt
 
+      - name: Set up Python 3.12
+        if: matrix.abi == 'cp312' && (matrix.arch == 'armhf' || matrix.arch == 'armv7')
+        uses: actions/setup-python@v4.7.1
+        with:
+          python-version: "3.12"
+          check-latest: true
+
+      - name: Build numpy
+        if: matrix.abi == 'cp312' && (matrix.arch == 'armhf' || matrix.arch == 'armv7')
+        id: check-numpy
+        run: |
+          numpy_req=$(cat requirements_all.txt | grep numpy)
+          python3.12 -m pip install --dry-run \
+            --only-binary :all: --target folder  \
+            --platform musllinux_1_2_${{ matrix.arch }} \
+            --extra-index-url=https://wheels.home-assistant.io/musllinux-index/ \
+            ${numpy_req} || error_code=$?
+
+          if [[ "${error_code}" -ne 0 ]]; then
+            echo "No numpy wheel found for: ${numpy_req}"
+            echo "build=true" >> $GITHUB_OUTPUT
+            touch requirements_numpy.txt
+            echo "${numpy_req}" >> requirements_numpy.txt
+            cp .env_file .env_file.bak
+            echo "PIP_NO_BUILD_ISOLATION=1" >> .env_file
+          fi
+
+      - name: Build wheels (numpy)
+        uses: home-assistant/wheels@2023.10.4
+        if: steps.check-numpy.outputs.build == 'true'
+        with:
+          abi: ${{ matrix.abi }}
+          tag: musllinux_1_2
+          arch: ${{ matrix.arch }}
+          wheels-key: ${{ secrets.WHEELS_KEY }}
+          env-file: true
+          apk: "bluez-dev;libffi-dev;openssl-dev;glib-dev;eudev-dev;libxml2-dev;libxslt-dev;libpng-dev;libjpeg-turbo-dev;tiff-dev;cups-dev;gmp-dev;mpfr-dev;mpc1-dev;ffmpeg-dev;gammu-dev;yaml-dev;openblas-dev;fftw-dev;lapack-dev;gfortran;blas-dev;eigen-dev;freetype-dev;glew-dev;harfbuzz-dev;hdf5-dev;libdc1394-dev;libtbb-dev;mesa-dev;openexr-dev;openjpeg-dev;uchardet-dev"
+          skip-binary: aiohttp;charset-normalizer;grpcio;SQLAlchemy;protobuf
+          constraints: "homeassistant/package_constraints.txt"
+          requirements-diff: "requirements_diff.txt"
+          requirements: "requirements_numpy.txt"
+          pip: "git+https://github.com/scikit-build/ninja-python-distributions.git@89b1a02be6b47919c4da3daad06f2a020a16cc7f;Cython;packaging;patchelf;pyproject-metadata;setuptools"
+
+      - name: Cleanup after numpy build
+        if: steps.check-numpy.outputs.build == 'true'
+        run: |
+          rm .env_file
+          mv .env_file.bak .env_file
+
       - name: Build wheels (old cython)
         uses: home-assistant/wheels@2023.10.4
         with:
