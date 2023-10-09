@@ -15,9 +15,9 @@ on:
       - "requirements_all.txt"
       - "requirements.txt"
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_name}}
-  cancel-in-progress: true
+# concurrency:
+#   group: ${{ github.workflow }}-${{ github.ref_name}}
+#   cancel-in-progress: true
 
 jobs:
   init:
@@ -76,7 +76,7 @@ jobs:
 
   core:
     name: Build Core wheels ${{ matrix.abi }} for ${{ matrix.arch }} (musllinux_1_2)
-    if: github.repository_owner == 'home-assistant'
+    if: false && github.repository_owner == 'home-assistant'
     needs: init
     runs-on: ubuntu-latest
     strategy:
@@ -121,7 +121,8 @@ jobs:
       fail-fast: false
       matrix:
         abi: ["cp312"]
-        arch: ${{ fromJson(needs.init.outputs.architectures) }}
+        # arch: ${{ fromJson(needs.init.outputs.architectures) }}
+        arch: ["armhf", "armv7"]
     steps:
       - name: Checkout the repository
         uses: actions/checkout@v4.1.0
